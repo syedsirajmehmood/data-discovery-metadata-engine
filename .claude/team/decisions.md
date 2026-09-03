@@ -147,3 +147,23 @@ made now should survive even if the document's wording around them evolves.
 **How to apply:** engineers build against architecture.md's current text for
 detail, but any future change to the choices above must be logged as a new
 dated entry here, not a silent edit.
+
+## 2026-09-03 — Control-plane implementation language (orchestrator)
+Architecture v1 fixed the data-plane language (Python) but left the
+control-plane's language/framework unspecified. Fixing it now, before
+engineering starts, so 5 parallel engineers don't each guess differently:
+- **Control-plane backend: Python + FastAPI.** Consistent with the
+  data-plane language (one language across the whole system reduces
+  context-switching for a small team), and every storage engine chosen in
+  architecture.md §4 has a mature Python client: SQLAlchemy/psycopg
+  (Postgres), the official `neo4j` driver, `opensearch-py`, and
+  `clickhouse-connect`.
+- **Control-plane frontend (`control-plane/web/`): TypeScript + React,
+  built with Vite.** Standard, current choice for a search/catalog web UI;
+  consumes the FastAPI backend as a plain REST/JSON API — no server-side
+  coupling between FE2's API and FE3's UI beyond the HTTP contract FE2
+  publishes.
+**Why:** without a pinned stack, FE1/FE2/FE3/DE/ML would each choose
+independently and produce incompatible services. **How to apply:** every
+engineering task in this phase targets this stack; a change requires a new
+dated entry here, not a silent per-engineer choice.

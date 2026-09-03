@@ -113,7 +113,7 @@ class TestColumnSchema:
             "column",
             {
                 "source_connection_id": "prod-postgres-1",
-                "table_id": "urn:postgres:h:db:public.orders",
+                "table_urn": "urn:postgres:h:db:public.orders",
                 "name": "id",
                 "ordinal_position": 0,
                 "native_data_type": "bigint",
@@ -129,7 +129,7 @@ class TestColumnSchema:
             "column",
             {
                 "source_connection_id": "prod-postgres-1",
-                "table_id": "t1",
+                "table_urn": "t1",
                 "name": "customer_id",
                 "ordinal_position": 1,
                 "native_data_type": "bigint",
@@ -137,7 +137,7 @@ class TestColumnSchema:
                 "is_nullable": True,
                 "is_primary_key": False,
                 "is_foreign_key": True,
-                "foreign_key_ref": {"table_urn": "urn:postgres:h:db:public.customers", "column_name": "id"},
+                "foreign_key_ref": {"table_urn": "urn:postgres:h:db:public.customers", "column": "id"},
             },
         )
 
@@ -145,7 +145,7 @@ class TestColumnSchema:
         assert_invalid(
             "column",
             {
-                "table_id": "t1",
+                "table_urn": "t1",
                 "name": "id",
                 "ordinal_position": 0,
                 "native_data_type": "bigint",

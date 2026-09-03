@@ -1,0 +1,28 @@
+# Source connections for running the agent as a HOST process (not inside
+# the docker-compose network) against `docker compose -f deploy/docker-compose.yml
+# up -d postgres minio minio-init` — localhost + the published host ports,
+# unlike sources.local.yaml which uses the compose-network hostnames
+# "postgres"/"minio" for the fully-dockerized agent service. See RUNBOOK.md.
+sources:
+  - connector_type: postgres
+    source_connection_id: local-postgres
+    config:
+      host: localhost
+      port: 5432
+      database: demo
+      user: demo
+      password: demo
+      host_alias: local-postgres
+
+  - connector_type: s3
+    source_connection_id: local-minio
+    config:
+      bucket: demo-bucket
+      prefixes:
+        - "events/"
+        - "exports/"
+      endpoint_url: http://localhost:9500
+      region_name: us-east-1
+      aws_access_key_id: minioadmin
+      aws_secret_access_key: minioadmin
+      use_path_style: true

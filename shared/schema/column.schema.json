@@ -10,7 +10,7 @@
   ],
   "required": [
     "source_connection_id",
-    "table_id",
+    "table_urn",
     "name",
     "ordinal_position",
     "native_data_type",
@@ -23,9 +23,9 @@
     "column_specific_fields": {
       "type": "object",
       "properties": {
-        "table_id": {
+        "table_urn": {
           "type": "string",
-          "description": "FK to the owning Table's id or urn."
+          "description": "The owning Table's urn. Not the catalog's internal id - a connector doesn't know that at push time (id is server-assigned, see common.schema.json); RelationalStore resolves urn -> internal id itself."
         },
         "name": { "type": "string", "minLength": 1 },
         "ordinal_position": { "type": "integer", "minimum": 0 },
@@ -50,7 +50,7 @@
           "description": "Pointer to the referenced table/column when is_foreign_key is true.",
           "properties": {
             "table_urn": { "type": "string" },
-            "column_name": { "type": "string" }
+            "column": { "type": "string" }
           },
           "additionalProperties": false
         },

@@ -268,3 +268,59 @@ Point 3 (FE3↔FE2) and point 4 (ML↔FE2) are the same category of risk that
 turned out to be real for FE1↔FE2 — worth checking before calling the MVP
 demo-ready, not assuming they're fine because each side documented an
 assumption.
+
+## 2026-09-03 — Full local stack run: real end-to-end proof, one more bug found+fixed (orchestrator)
+Addressed status items 1-3 above by actually running the whole system
+connected — control-plane storage (Postgres/Neo4j/OpenSearch/ClickHouse via
+`infra/docker-compose.yml`), the ingest API wired to FE2's real stores (new:
+`control-plane/scripts/{bootstrap_local,run_ingest_local,local_constants}.py`),
+the catalog API against the same real stores, a data-plane agent running as
+a host process against real seeded Postgres + MinIO sources (new:
+`data-plane/deploy/sources.local-host.yaml`), and the web UI against the
+real catalog API via a local-dev-only auth-injecting proxy (new: proxy
+config in `control-plane/web/vite.config.ts`, gated behind
+`VITE_LOCAL_PROXY_TARGET`/`VITE_LOCAL_API_KEY` so it's inert unless
+explicitly enabled). Full step-by-step in `RUNBOOK.md` (repo root).
+
+**Found and fixed a second real integration bug** (same category as the
+FE1/FE2 type mismatch, this time between the Data Engineer's connector and
+FE1's schema): the Postgres connector's `Column` payload sends `table_urn`
+(a connector cannot know the catalog's internal id at push time) and
+`foreign_key_ref.column`, but `shared/schema/column.schema.json` required
+the literal key `table_id` and `foreign_key_ref.column_name`. Notably,
+FE1's own schema description text already said `table_id`'s value should
+be "the owning Table's id **or urn**", and FE2's real `ColumnEntity` Postgres
+model already used a column named `table_urn` — so the connector and the
+storage layer already agreed with each other; the JSON Schema was the one
+inconsistent piece. Fixed by renaming the schema fields to match (not by
+changing the connector), verified by re-running the agent cycle before/after:
+13 of 18 entities rejected before the fix, 18/18 accepted after, with the
+ingest service restarted in between (a running process caches the schema at
+import time — file edits alone don't take effect without a restart, which
+cost one confusing repeat-failure cycle during this exercise, noted in
+RUNBOOK.md).
+
+**Verified with real data, not fixtures**: search results returned a table
+scraped from a live local Postgres, with a real `last_scraped_at`
+timestamp, via `GET /v1/catalog/search?q=orders` — confirming the entire
+push→validate→fan-out→Postgres+OpenSearch→catalog-read chain is real and
+connected, and the web UI rendering it via the same live API (through the
+dev-proxy auth workaround, since the UI itself has no auth flow — correctly
+out of MVP scope per design.md, but means "point it at a real backend"
+needed a bridge that didn't exist before this pass).
+
+**One gap found and deliberately left open** (documented in RUNBOOK.md's
+"What this exercise found," not silently ignored): `GET /v1/catalog/
+sources/status` always returns empty. `scrape_run` entities are routed only
+to ClickHouse (`AnalyticsStore.record_event`) per the fan-out worker's
+routing table (correct, per spec.md: "Scrape Run... not itself catalog
+content"), but the Source Connection Status screen's backing endpoint reads
+from Postgres's `ConnectorRun` table via a *different* method
+(`RelationalStore.record_connector_run()`) that nothing in the current
+pipeline calls. These were built as two disconnected bookkeeping paths.
+Fixing this means either the fan-out worker also calls
+`record_connector_run()` for `scrape_run` entities, or the catalog API's
+sources/status endpoint reads scrape history from ClickHouse instead of
+Postgres — a real design choice, not a one-line fix, so left for a
+follow-up rather than guessed at here. Search and asset-detail views are
+unaffected and fully working.

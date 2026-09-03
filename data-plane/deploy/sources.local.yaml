@@ -1,0 +1,29 @@
+# Source connections for local dev (docker-compose) -- points the agent at
+# the compose-network hostnames "postgres" and "minio", NOT localhost,
+# because the agent runs inside the compose network. If running the agent
+# on the host against `docker compose up postgres minio` instead, override
+# with localhost + the published ports (see README "Running against
+# docker-compose services from the host").
+sources:
+  - connector_type: postgres
+    source_connection_id: local-postgres
+    config:
+      host: postgres
+      port: 5432
+      database: demo
+      user: demo
+      password: demo
+      host_alias: local-postgres
+
+  - connector_type: s3
+    source_connection_id: local-minio
+    config:
+      bucket: demo-bucket
+      prefixes:
+        - "events/"
+        - "exports/"
+      endpoint_url: http://minio:9000
+      region_name: us-east-1
+      aws_access_key_id: minioadmin
+      aws_secret_access_key: minioadmin
+      use_path_style: true

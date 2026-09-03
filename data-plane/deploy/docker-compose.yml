@@ -1,0 +1,105 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: demo
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      # Published on non-default host ports to avoid colliding with other
+      # local stacks that commonly bind 9000 (e.g. ClickHouse's HTTP
+      # port). Only the in-network port (9000, used by `endpoint_url:
+      # http://minio:9000` in sources.local.yaml) matters to the agent
+      # container; these host-side mappings are for the S3 console/CLI
+      # access from your host machine only.
+      - "9500:9000"
+      - "9501:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./minio-init/sample-data:/seed:ro
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb -p local/demo-bucket || true &&
+      mc cp --recursive /seed/ local/demo-bucket/ &&
+      echo 'seed complete'
+      "
+
+  mock-ingest:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ./mock_ingest_server.py:/app/mock_ingest_server.py:ro
+      - mock-ingest-received:/data/received
+    environment:
+      MOCK_API_KEY: local-dev-key
+      MOCK_PORT: "8080"
+    command: ["python", "/app/mock_ingest_server.py"]
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      mock-ingest:
+        condition: service_healthy
+    environment:
+      # Never hardcoded (decisions.md) -- these are the only place the
+      # control-plane URL/key are set for local dev, and it's plain config.
+      DP_CONTROL_PLANE_URL: http://mock-ingest:8080
+      DP_API_KEY: local-dev-key
+      DP_DATA_PLANE_ID: dp-local-1
+      DP_SOURCES_CONFIG_FILE: /app/config/sources.local.yaml
+      # Short interval for local demo -- production default is 6h (unset).
+      DP_SCRAPE_INTERVAL_SECONDS: "60"
+      DP_MAX_BATCH_ENTITIES: "500"
+      DP_MAX_BATCH_INTERVAL_SECONDS: "60"
+    volumes:
+      - ./sources.local.yaml:/app/config/sources.local.yaml:ro
+      - agent-data:/app/data
+
+volumes:
+  pg-data:
+  minio-data:
+  mock-ingest-received:
+  agent-data:

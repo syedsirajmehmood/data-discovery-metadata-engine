@@ -1,0 +1,4 @@
+event_id,user_id,event_type,occurred_at
+1,1,page_view,2024-01-01T10:00:00Z
+2,2,page_view,2024-01-01T10:05:00Z
+3,1,click,2024-01-01T10:06:00Z

@@ -1,0 +1,11 @@
+# Test-only dependencies for control-plane/storage/search/relevance/.
+#
+# Deliberately the *only* dependency: everything in this package (boost
+# profile, popularity scoring, the hook) is stdlib-only (dataclasses,
+# typing, datetime, copy, warnings) so it runs with zero OpenSearch/
+# ClickHouse client installed. pytest is needed only to run the test suite.
+#
+# Run from the repo root:
+#   pip install -r control-plane/storage/search/relevance/requirements-test.txt
+#   pytest control-plane/storage/search/relevance
+pytest>=8.0

@@ -1,0 +1,3 @@
+event_id,user_id,event_type,occurred_at
+4,2,page_view,2024-01-02T09:00:00Z
+5,3,purchase,2024-01-02T09:30:00Z

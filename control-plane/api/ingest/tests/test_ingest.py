@@ -81,8 +81,8 @@ class TestHappyPath:
         assert body["rejected"][0]["error"] == "schema_validation_failed"
 
         # only the accepted entity reached storage
-        assert good["urn"] in stores["relational"].entities_by_urn
-        assert bad["urn"] not in stores["relational"].entities_by_urn
+        assert good["urn"] in stores["relational"].records_by_urn
+        assert bad["urn"] not in stores["relational"].records_by_urn
 
 
 class TestServerAssignedFieldsNeverTrusted:
@@ -97,7 +97,7 @@ class TestServerAssignedFieldsNeverTrusted:
         body = resp.json()
         assert body["accepted"] == []
         assert body["rejected"][0]["error"] == "forbidden_field_in_payload"
-        assert entity["urn"] not in stores["relational"].entities_by_urn
+        assert entity["urn"] not in stores["relational"].records_by_urn
 
     def test_id_in_payload_is_rejected(self, client):
         entity = make_table_entity()
@@ -223,4 +223,4 @@ class TestIdempotency:
 
         assert resp.status_code == 202
         assert resp.json()["accepted"] == [entity["urn"]]
-        assert stores["relational"].get(entity["urn"]).is_deleted is True
+        assert stores["relational"].get(entity["urn"]).is_delete is True

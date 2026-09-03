@@ -155,3 +155,116 @@ and FE2 treat it as a versioned dependency.
 **Ready for engineering dispatch** — this task breakdown is what the
 orchestrator will hand to the 3 fullstack engineers, data engineer, and ML
 engineer next.
+
+## 2026-09-03 — Engineering phase complete + merged (orchestrator)
+All 5 engineers (FE1, FE2, FE3, Data Engineer, ML Engineer) built their
+scoped slices in parallel, isolated git worktrees per the Tech Lead's task
+breakdown, and all 5 branches have been merged into `main`. Before merging,
+the orchestrator also had to pin the control-plane implementation language
+(Python/FastAPI + TypeScript/React — see decisions.md, "Control-plane
+implementation language"), since architecture.md only fixed the data-plane
+language and 5 parallel engineers would otherwise have guessed differently.
+
+**What shipped, by engineer:**
+- **FE1** — `shared/schema/` (JSON Schema for the envelope + all 6 entity
+  types), `control-plane/api/ingest/` (the push contract endpoint: auth,
+  validation, idempotency, per-entity accept/reject), `control-plane/
+  workers/fanout/` (orchestration routing entities to the 4 storage
+  interfaces). 54 tests, verified live over real HTTP including idempotent
+  replay.
+- **FE2** — `control-plane/storage/{relational,graph,search,analytics}/`
+  (Postgres/Neo4j/OpenSearch/ClickHouse clients) and `control-plane/api/
+  catalog/` (the read API). 39 tests (unit + real-service integration,
+  auto-skipping if Docker isn't running). Documented 5 deviations from
+  architecture.md (data_plane_id as string not UUID, Dataset added to the
+  graph/search model, lineage edges keyed by urn, catalog-API auth reusing
+  api_keys, entities_* tables not FK'd to tenants for write-path
+  simplicity) — all justified, not silent.
+- **FE3** — `control-plane/web/` (TypeScript + React/Vite): all 3 MVP
+  screens per design.md, one shared freshness-badge component reused
+  everywhere, 45 tests, clean `tsc -b && vite build`.
+- **Data Engineer** — `data-plane/` in full: `BaseConnector` interface,
+  `PostgresConnector`, `S3Connector`, the agent runner (scheduler/batcher/
+  push client/retry/dead-letter-queue), plus Docker Compose for local dev.
+  126 tests; also stood up the full compose stack (real Postgres + MinIO)
+  and verified a live push cycle end-to-end.
+- **ML Engineer** — `control-plane/storage/search/relevance/` only (scope
+  respected exactly): field-weight boosting, ClickHouse-derived popularity
+  scoring, documented assumed hook interface for FE2 to reconcile, 32
+  tests.
+
+**Rate-limit note:** all 5 agents were dispatched together; 3 of the 4
+docs-phase agents earlier in this project had hit a session limit
+mid-run — for this phase all 5 completed cleanly with no interruption.
+
+**Merge:** all 5 worktree branches merged into `main` with no code
+conflicts (each engineer's directories were genuinely disjoint, confirming
+the Tech Lead's task breakdown held up in practice). 3 shared files
+(`.gitignore`, `control-plane/requirements.txt`, `control-plane/README.md`)
+had add/add conflicts from FE1 and FE2 independently creating them —
+resolved by the orchestrator by combining both sides' content rather than
+picking one.
+
+**Real integration gap found and fixed (orchestrator, not delegated to a
+new agent — the problem was fully diagnosable from the two files
+involved):** FE1's `workers/fanout/interfaces.py` and FE2's actual
+`storage/*/store.py` implementations matched on method *names*
+(`upsert_entity`, `index_entity`, `record_event`) per architecture.md §8,
+but not on *types* — FE1 had defined its own parallel `CatalogEntity`/
+`UpsertResult`/`AnalyticsEvent`, while FE2's real stores are built against
+`storage/types.py`'s `EntityRecord`/`UpsertResult`/`ScrapeEvent`/
+`UsageEvent` (different field sets, different return-value semantics, and
+FE2's `EntityType` enum has no `scrape_run` member since that entity type
+never reaches Relational/Graph/Search at all). Fixed by rewriting FE1's
+`interfaces.py` to import and match FE2's real types exactly, introducing
+a `ValidatedEntity` type for what crosses from ingest into the fan-out
+worker (replacing `CatalogEntity`), and updating `worker.py`/`service.py`/
+the fan-out test suite accordingly. Notably, `ValidatedEntity` does NOT
+carry `id`/`first_seen_at`/`last_scraped_at` the way `CatalogEntity` did —
+FE2's `RelationalStore` manages entity identity internally rather than
+receiving a candidate id from ingest, which is a cleaner design than FE1's
+original assumption. The `TestFirstSeenAtPreserved` test (which asserted
+behavior belonging to FE2's RelationalStore, not FE1's orchestration) was
+removed from `workers/fanout/tests/` for the same reason.
+
+**Verification performed post-reconciliation (not just unit tests):**
+- `control-plane/workers/fanout/` + `control-plane/api/ingest/` + `shared/
+  schema/`: 53 tests passing (down from 54 — one test removed per above).
+- `control-plane/storage/` + `control-plane/api/catalog/`: 32 tests passing.
+- `control-plane/storage/search/relevance/`: 32 tests passing.
+- `data-plane/` unit tests: 114 passing.
+- `control-plane/web/`: 45 tests passing, `tsc -b && vite build` clean.
+- **Live end-to-end smoke test**: ran the real ingest FastAPI service
+  (`python control-plane/api/ingest/app.py`) and POSTed a real batch over
+  HTTP — accepted with no rejections, proving the reconciled fan-out path
+  (ingest → EntityRecord → in-memory fakes shaped exactly like FE2's real
+  stores) works, not just that the unit tests were updated to match.
+
+**Still not done (explicitly out of scope for this pass, tracked here so
+it isn't lost):**
+1. FE1's `IngestDependencies` has never actually been wired to FE2's *real*
+   Postgres/Neo4j/OpenSearch/ClickHouse store classes in a running process
+   — only proven against in-memory fakes on both sides. Someone needs to
+   instantiate FE2's real stores and pass them into `create_app(ingest_deps=...)`
+   and confirm a push actually lands in real Postgres/Neo4j/OpenSearch/
+   ClickHouse (docker-compose is already in `infra/`).
+2. Data Engineer's agent pushes to a *mock* ingest server
+   (`data-plane/deploy/mock_ingest_server.py`), not FE1's real FastAPI
+   service — full end-to-end (real Postgres/S3 source → real data-plane
+   agent → real ingest API → real storage → real catalog UI) has not been
+   run as one connected system yet.
+3. FE3's UI was built and tested against mocked fetch responses, not
+   FE2's real catalog API — the documented API shape matches, but no one
+   has run FE3 against a live FE2 backend yet.
+4. FE2's `RelevanceBoostHook` Protocol (in `storage/search/query_builder.py`)
+   and ML's assumed hook interface (`storage/search/relevance/INTERFACE.md`)
+   have not been reconciled the way the FE1/FE2 seam was — same class of
+   problem, not yet checked.
+5. No queue between ingest and fan-out (FE1's documented simplification);
+   no Postgres-backed idempotency store or API-key registry yet (both are
+   in-memory).
+
+Point 3 (FE3↔FE2) and point 4 (ML↔FE2) are the same category of risk that
+turned out to be real for FE1↔FE2 — worth checking before calling the MVP
+demo-ready, not assuming they're fine because each side documented an
+assumption.

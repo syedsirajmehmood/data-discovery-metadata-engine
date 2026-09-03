@@ -1,5 +1,5 @@
 """Fan-out orchestration: takes a batch of already-validated
-`CatalogEntity` objects and calls out to the storage-client interfaces
+`ValidatedEntity` objects and calls out to the storage-client interfaces
 (interfaces.py). This module owns ORCHESTRATION ONLY - it never talks to
 Postgres/Neo4j/OpenSearch/ClickHouse directly (architecture.md §8: FE1
 owns `control-plane/workers/fanout/` "orchestration logic only, not
@@ -22,21 +22,24 @@ Routing table (architecture.md §4 + spec.md's entity list):
     because spec.md's Lineage Edge schema allows `upstream_entity_type`/
     `downstream_entity_type` = 'dataset', so an S3 dataset must be able to
     exist as a graph node to be an edge endpoint - otherwise a lineage
-    edge referencing a dataset would point at nothing. Flagged in the
-    top-level report as a documented interpretation, not a silent change
-    to the frozen architecture doc.
+    edge referencing a dataset would point at nothing. FE2 independently
+    made the same call (storage/graph/store.py adds a `(:Dataset)` label).
 
 `scrape_run` is routed only to AnalyticsStore, per spec.md: "Scrape Run...
 not itself catalog content" - it doesn't go through the entity system of
 record at all, matching architecture.md §4's ClickHouse `scrape_events`
-table being where scrape history lives.
+table being where scrape history lives. It also isn't a member of
+`storage.types.EntityType`, so it's handled before any `EntityRecord` is
+constructed, not as a 7th enum value.
 
 Content-hash no-op optimization (architecture.md §2): RelationalStore is
 always called first (it's the system of record and the only store that can
-tell us whether anything actually changed - see interfaces.UpsertResult).
-If it reports `changed=False`, GraphStore/SearchIndex are skipped for that
+tell us whether anything actually changed - see storage.types.UpsertResult).
+If it reports `skipped=True`, GraphStore/SearchIndex are skipped for that
 entity - "cheap no-op detection", per architecture.md §2. Deletes always
-count as changed (is_deleted flips), so tombstones always propagate.
+count as changed regardless of what the store reports (tombstones must
+always propagate), enforced defensively here rather than trusted entirely
+to the store's `skipped` flag.
 
 Synchronous-call simplification (documented, not silent): architecture.md
 §7.3's sequence diagram shows the ingest API returning "202 Accepted" while
@@ -53,22 +56,31 @@ this module's routing logic.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List
 
+from storage.types import EntityRecord, EntityType, Operation, ScrapeEvent
 from workers.fanout.interfaces import (
-    AnalyticsEvent,
     AnalyticsStore,
-    CatalogEntity,
     GraphStore,
     RelationalStore,
     SearchIndex,
+    ValidatedEntity,
 )
 
 GRAPH_ENTITY_TYPES = frozenset({"table", "column", "dataset", "job", "lineage_edge"})
 SEARCH_ENTITY_TYPES = frozenset({"table", "column", "dataset", "job"})
 RELATIONAL_ENTITY_TYPES = frozenset({"table", "column", "dataset", "job", "lineage_edge"})
 ANALYTICS_ONLY_ENTITY_TYPES = frozenset({"scrape_run"})
+
+
+def _parse_iso8601(value: str) -> datetime:
+    # storage.types uses stdlib datetime; the push envelope (architecture.md
+    # §2) uses "Z"-suffixed ISO 8601, which datetime.fromisoformat only
+    # accepts as "+00:00" on this project's minimum Python version (3.9).
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 @dataclass(frozen=True)
@@ -114,13 +126,26 @@ class FanoutWorker:
         self._analytics = analytics_store
         self._connector_type = connector_type
 
-    def process_batch(self, batch_id: str, entities: List[CatalogEntity]) -> FanoutResult:
+    def process_batch(self, batch_id: str, entities: List[ValidatedEntity]) -> FanoutResult:
         outcomes = [self._process_one(entity) for entity in entities]
         return FanoutResult(batch_id=batch_id, outcomes=outcomes)
 
-    def _process_one(self, entity: CatalogEntity) -> EntityFanoutOutcome:
+    def _to_entity_record(self, entity: ValidatedEntity) -> EntityRecord:
+        return EntityRecord(
+            tenant_id=entity.tenant_id,
+            urn=entity.urn,
+            entity_type=EntityType(entity.entity_type),
+            data_plane_id=entity.data_plane_id,
+            source_connection_id=entity.source_connection_id or "",
+            payload=entity.payload,
+            operation=Operation(entity.operation),
+            content_hash=entity.content_hash,
+            extracted_at=_parse_iso8601(entity.extracted_at),
+        )
+
+    def _process_one(self, entity: ValidatedEntity) -> EntityFanoutOutcome:
         if entity.entity_type in ANALYTICS_ONLY_ENTITY_TYPES:
-            self._record_event(entity, event_type="scrape_run")
+            self._record_scrape_event(entity, event_type="scrape_run")
             return EntityFanoutOutcome(
                 urn=entity.urn,
                 entity_type=entity.entity_type,
@@ -131,27 +156,29 @@ class FanoutWorker:
                 skipped_as_unchanged=False,
             )
 
+        record = self._to_entity_record(entity)
+
         wrote_relational = False
         changed = True
         if entity.entity_type in RELATIONAL_ENTITY_TYPES:
-            result = self._relational.upsert_entity(entity)
+            result = self._relational.upsert_entity(record)
             wrote_relational = True
-            changed = result.changed
+            changed = (not result.skipped) or entity.operation == "delete"
 
         wrote_graph = False
         wrote_search = False
         if changed:
             if entity.entity_type in GRAPH_ENTITY_TYPES:
-                self._graph.upsert_entity(entity)
+                self._graph.upsert_entity(record)
                 wrote_graph = True
             if entity.entity_type in SEARCH_ENTITY_TYPES:
-                self._search.index_entity(entity)
+                self._search.index_entity(record)
                 wrote_search = True
 
         event_type = "entity_deleted" if entity.operation == "delete" else (
             "entity_upserted" if changed else "entity_unchanged"
         )
-        self._record_event(entity, event_type=event_type)
+        self._record_scrape_event(entity, event_type=event_type)
 
         return EntityFanoutOutcome(
             urn=entity.urn,
@@ -163,15 +190,15 @@ class FanoutWorker:
             skipped_as_unchanged=not changed,
         )
 
-    def _record_event(self, entity: CatalogEntity, *, event_type: str) -> None:
+    def _record_scrape_event(self, entity: ValidatedEntity, *, event_type: str) -> None:
         self._analytics.record_event(
-            AnalyticsEvent(
+            ScrapeEvent(
                 tenant_id=entity.tenant_id,
                 data_plane_id=entity.data_plane_id,
                 connector_type=self._connector_type,
                 urn=entity.urn,
                 event_type=event_type,
-                occurred_at=entity.extracted_at,
-                detail={"entity_type": entity.entity_type, "operation": entity.operation},
+                occurred_at=_parse_iso8601(entity.extracted_at),
+                detail=json.dumps({"entity_type": entity.entity_type, "operation": entity.operation}),
             )
         )

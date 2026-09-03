@@ -1,5 +1,14 @@
 """Tests for FanoutWorker's routing logic, using the in-memory fakes
-(fakes.py) so this runs with no real Postgres/Neo4j/OpenSearch/ClickHouse."""
+(fakes.py) so this runs with no real Postgres/Neo4j/OpenSearch/ClickHouse.
+
+Reconciliation note (2026-09-03, orchestrator): rewritten to build
+`ValidatedEntity` (interfaces.py) instead of the original `CatalogEntity` -
+see interfaces.py's module docstring. The old `TestFirstSeenAtPreserved`
+test is removed: `first_seen_at` isn't part of the ingest->fanout contract
+anymore (FE2's RelationalStore manages entity identity/first-seen tracking
+internally, not via a candidate value passed in from ingest) - that
+property now belongs in FE2's own RelationalStore test suite, not here.
+"""
 from __future__ import annotations
 
 import pytest
@@ -10,7 +19,7 @@ from workers.fanout.fakes import (
     InMemoryRelationalStore,
     InMemorySearchIndex,
 )
-from workers.fanout.interfaces import CatalogEntity
+from workers.fanout.interfaces import ValidatedEntity
 from workers.fanout.worker import FanoutWorker
 
 
@@ -19,22 +28,17 @@ def make_entity(
     entity_type: str = "table",
     operation: str = "upsert",
     content_hash: str = "sha256:abc",
-    is_deleted: bool = False,
     payload: dict = None,
-) -> CatalogEntity:
-    return CatalogEntity(
-        id="11111111-1111-1111-1111-111111111111",
+) -> ValidatedEntity:
+    return ValidatedEntity(
         urn=urn,
         entity_type=entity_type,
         tenant_id="22222222-2222-2222-2222-222222222222",
         data_plane_id="dp_1",
         source_connection_id="prod-postgres-1",
         operation=operation,
-        is_deleted=is_deleted,
         content_hash=content_hash,
         extracted_at="2026-09-02T10:14:50Z",
-        first_seen_at="2026-09-02T10:14:50Z",
-        last_scraped_at="2026-09-02T10:14:50Z",
         payload=payload or {"table_name": "orders"},
     )
 
@@ -119,7 +123,6 @@ class TestDeleteAlwaysPropagates:
             "urn:postgres:h:db:public.orders",
             content_hash="sha256:v1",
             operation="delete",
-            is_deleted=True,
         )
 
         worker.process_batch("batch-1", [e1])
@@ -130,21 +133,7 @@ class TestDeleteAlwaysPropagates:
         assert outcome.wrote_graph is True
         assert outcome.wrote_search is True
         assert stores["analytics"].events[-1].event_type == "entity_deleted"
-        assert stores["relational"].get(e1.urn).is_deleted is True
-
-
-class TestFirstSeenAtPreserved:
-    def test_first_seen_at_immutable_across_rescrapes(self, worker, stores):
-        e1 = make_entity("urn:postgres:h:db:public.orders", content_hash="sha256:v1")
-        object.__setattr__(e1, "first_seen_at", "2020-01-01T00:00:00Z")
-        e2 = make_entity("urn:postgres:h:db:public.orders", content_hash="sha256:v2")
-        object.__setattr__(e2, "first_seen_at", "2026-09-02T10:14:50Z")
-
-        worker.process_batch("batch-1", [e1])
-        worker.process_batch("batch-2", [e2])
-
-        stored = stores["relational"].get(e1.urn)
-        assert stored.first_seen_at == "2020-01-01T00:00:00Z"
+        assert stores["relational"].get(e1.urn).is_delete is True
 
 
 class TestLineageEdgeRouting:
@@ -177,7 +166,7 @@ class TestScrapeRunRouting:
         assert outcome.wrote_search is False
         assert outcome.wrote_analytics is True
 
-        assert stores["relational"].entities_by_urn == {}
+        assert stores["relational"].records_by_urn == {}
         assert stores["graph"].upserted == []
         assert stores["search"].index_calls == []
         assert stores["analytics"].events[0].event_type == "scrape_run"

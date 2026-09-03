@@ -1,23 +1,18 @@
 """Storage-client interfaces: the agreed seam between FE1's fan-out
 orchestration (this package) and FE2's concrete storage clients
-(`control-plane/storage/`), per architecture.md §8:
+(`control-plane/storage/`), per architecture.md §8.
 
-    "FE2's storage-client interfaces (`GraphStore.upsert_entity()`,
-    `SearchIndex.index_entity()`, `AnalyticsStore.record_event()`,
-    `RelationalStore.upsert_entity()`) are the seam the fan-out worker
-    calls - FE1 codes against those method signatures (agreed upfront,
-    stubbed by FE2 on day one) so both can build in parallel without
-    waiting on each other's full implementation."
-
-IMPORTANT — location note for FE2: this module lives at
-`control-plane/workers/fanout/interfaces.py`, inside FE1's owned tree, NOT
-under `control-plane/storage/` — FE1's task explicitly excludes touching
-`control-plane/storage/` (that's FE2's directory). FE2's concrete classes
-(e.g. `control-plane/storage/relational/postgres_store.py`) should live
-under `control-plane/storage/` as usual and simply implement (structurally
-satisfy - these are `typing.Protocol`s, so no inheritance is required, just
-matching method signatures) the Protocols defined here. Import them from
-`workers.fanout.interfaces` rather than duplicating the shape.
+Reconciliation note (2026-09-03, orchestrator): FE1 and FE2 built in
+parallel worktrees against the same *names* (`RelationalStore.upsert_entity()`
+etc.) but different *types* - FE1 originally defined its own `CatalogEntity`/
+`UpsertResult`/`AnalyticsEvent` here, while FE2's actual stores
+(`control-plane/storage/*/store.py`) are built against
+`control-plane/storage/types.py`'s `EntityRecord`/`UpsertResult`/
+`ScrapeEvent`/`UsageEvent`. Since FE2's types are the ones with real
+Postgres/Neo4j/OpenSearch/ClickHouse implementations behind them, this
+module now imports and matches FE2's types exactly rather than defining
+parallel ones. See `.claude/team/status.md` (2026-09-03 entry) for the full
+story.
 
 Only 4 methods are the fixed seam (per architecture.md §8) - one per store.
 Each store is asked to do exactly one thing for the fan-out worker:
@@ -26,110 +21,69 @@ Each store is asked to do exactly one thing for the fan-out worker:
     GraphStore.upsert_entity()       -> Neo4j, lineage/relationship projection
     SearchIndex.index_entity()       -> OpenSearch, full-text projection
     AnalyticsStore.record_event()    -> ClickHouse, append-only audit/scrape trail
-
-Everything else in this module (CatalogEntity, UpsertResult, AnalyticsEvent)
-is data-shape scaffolding around those 4 calls, owned by FE1 since it's
-part of the orchestration contract, not the storage clients themselves.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 try:
     from typing import Protocol, runtime_checkable
 except ImportError:  # pragma: no cover - py<3.8 fallback, not expected here
     from typing_extensions import Protocol, runtime_checkable  # type: ignore
 
+from storage.types import EntityRecord, ScrapeEvent, UpsertResult, UsageEvent
 
-# ---------------------------------------------------------------------------
-# Data shapes passed across the seam
-# ---------------------------------------------------------------------------
+__all__ = [
+    "ValidatedEntity",
+    "EntityRecord",
+    "UpsertResult",
+    "ScrapeEvent",
+    "UsageEvent",
+    "RelationalStore",
+    "GraphStore",
+    "SearchIndex",
+    "AnalyticsStore",
+]
 
 
 @dataclass(frozen=True)
-class CatalogEntity:
-    """The fully-resolved representation of one push-contract entity, after
-    auth + shared/schema validation + idempotency, and before storage
-    fan-out. This is what every storage-interface method below receives.
+class ValidatedEntity:
+    """One push-contract entity after auth + shared/schema validation +
+    idempotency, and before storage fan-out. This is what
+    `control-plane/api/ingest/service.py` hands to
+    `FanoutWorker.process_batch()`.
 
-    Built by merging (see control-plane/api/ingest/service.py):
-      - the envelope's per-entity fields: urn, entity_type, operation,
-        content_hash, extracted_at (architecture.md §2)
-      - server-resolved common fields: id, tenant_id, data_plane_id,
-        first_seen_at, last_scraped_at, is_deleted (never trusted from the
-        push payload - see shared/schema/README.md)
-      - the connector-supplied payload: entity-type-specific fields plus
-        source_connection_id, already validated against
-        shared/schema/<entity_type>.schema.json
+    Deliberately raw/untyped (`entity_type`/`operation` as plain strings,
+    `extracted_at` as an ISO 8601 string) - the worker, not the ingest
+    layer, decides how each entity_type maps onto FE2's storage types
+    (`storage.types.EntityRecord` for catalog entities,
+    `storage.types.ScrapeEvent` for `scrape_run`, which isn't a member of
+    `storage.types.EntityType` at all), since that mapping is inseparable
+    from the routing table `worker.py` already owns.
 
-    Note: `scrape_run` entities are the one exception that never reaches
-    RelationalStore/GraphStore/SearchIndex - see worker.py's routing table.
-    They carry `tenant_id`/`data_plane_id` inside `payload` itself (per
-    scrape_run.schema.json, which is not wrapped by common.schema.json), so
-    for that entity_type this dataclass's top-level tenant_id/data_plane_id
-    are still populated the same server-resolved way for consistency, and
-    `payload` additionally carries the scrape_run-specific fields.
+    Notably does NOT carry `id`, `first_seen_at`, or `last_scraped_at` -
+    unlike the original `CatalogEntity` this replaces, FE2's `EntityRecord`
+    has no such fields. FE2's `RelationalStore` (the system of record)
+    manages entity identity and first-seen tracking internally; the ingest
+    layer has no way to know in advance whether a `urn` is new (architecture.md
+    §8: FE1 never touches storage/), so it doesn't try to.
     """
 
-    id: str
-    """A CANDIDATE id (freshly generated per push by
-    control-plane/api/ingest/service.py). RelationalStore is the system of
-    record and the sole authority on whether `urn` already exists; if it
-    does, RelationalStore.upsert_entity() must keep the pre-existing id
-    (and first_seen_at) rather than this candidate, and return the
-    authoritative value as UpsertResult.stored_id. The ingest layer has no
-    way to know in advance whether a urn is new, since it doesn't query
-    storage directly (architecture.md §8: FE1 never touches storage/)."""
     urn: str
-    entity_type: str  # 'table' | 'column' | 'dataset' | 'job' | 'lineage_edge' | 'scrape_run'
+    entity_type: str  # 'table' | 'column' | 'dataset' | 'job' | 'lineage_edge' | 'scrape_run' | ...
     tenant_id: str
     data_plane_id: str
     source_connection_id: Optional[str]
     operation: str  # 'upsert' | 'delete'
-    is_deleted: bool
     content_hash: Optional[str]
     extracted_at: str  # ISO 8601 timestamp
-    first_seen_at: str  # ISO 8601 timestamp
-    last_scraped_at: str  # ISO 8601 timestamp
     payload: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class UpsertResult:
-    """Returned by RelationalStore.upsert_entity() (and reused as the
-    return shape for GraphStore.upsert_entity() where a caller cares).
-
-    `changed` is what makes the content_hash no-op optimization in
-    architecture.md §2 possible without a 5th method: RelationalStore is
-    the system of record, so it's the one store positioned to know whether
-    this write actually changed anything (new entity, or content_hash
-    differs from what's stored) versus a re-scrape that observed no
-    change. The fan-out worker uses `changed` to decide whether to bother
-    calling GraphStore/SearchIndex at all for this entity.
-    """
-
-    changed: bool
-    stored_id: str
-
-
-@dataclass(frozen=True)
-class AnalyticsEvent:
-    """One row for ClickHouse's append-only `scrape_events`-shaped table
-    (architecture.md §4: `scrape_events(tenant_id, data_plane_id,
-    connector_type, urn, event_type, occurred_at, detail)`)."""
-
-    tenant_id: str
-    data_plane_id: str
-    connector_type: str
-    urn: str
-    event_type: str  # e.g. 'entity_upserted', 'entity_deleted', 'entity_unchanged', 'scrape_run'
-    occurred_at: str  # ISO 8601 timestamp
-    detail: Dict[str, Any] = field(default_factory=dict)
-
-
 # ---------------------------------------------------------------------------
-# The seam itself - 4 Protocols, structural typing (no inheritance required)
+# The seam itself - 4 Protocols, structural typing (no inheritance required),
+# matching control-plane/storage/*/store.py's actual signatures exactly.
 # ---------------------------------------------------------------------------
 
 
@@ -137,7 +91,7 @@ class AnalyticsEvent:
 class RelationalStore(Protocol):
     """Postgres: system of record for entities (architecture.md §4)."""
 
-    def upsert_entity(self, entity: CatalogEntity) -> UpsertResult: ...
+    def upsert_entity(self, record: EntityRecord) -> UpsertResult: ...
 
 
 @runtime_checkable
@@ -153,18 +107,18 @@ class GraphStore(Protocol):
     for which entity_types the orchestration routes here at all.
     """
 
-    def upsert_entity(self, entity: CatalogEntity) -> None: ...
+    def upsert_entity(self, record: EntityRecord) -> UpsertResult: ...
 
 
 @runtime_checkable
 class SearchIndex(Protocol):
     """OpenSearch: full-text catalog search projection (architecture.md §4)."""
 
-    def index_entity(self, entity: CatalogEntity) -> None: ...
+    def index_entity(self, record: EntityRecord) -> UpsertResult: ...
 
 
 @runtime_checkable
 class AnalyticsStore(Protocol):
     """ClickHouse: append-only scrape/audit/usage event trail (architecture.md §4)."""
 
-    def record_event(self, event: AnalyticsEvent) -> None: ...
+    def record_event(self, event: Union[ScrapeEvent, UsageEvent]) -> None: ...

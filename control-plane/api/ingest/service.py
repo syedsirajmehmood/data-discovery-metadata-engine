@@ -14,7 +14,6 @@ spinning up FastAPI's TestClient for every case.
 """
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from typing import List
 
@@ -25,7 +24,7 @@ from api.ingest.idempotency import IdempotencyStore
 from api.ingest.models import EntityItem, IngestBatchEnvelope, IngestBatchResponse, RejectedEntity
 from api.ingest.validation import validate_entity_payload, validate_envelope_shape
 from shared.schema import CURRENT_SCHEMA_VERSION
-from workers.fanout.interfaces import AnalyticsStore, CatalogEntity, GraphStore, RelationalStore, SearchIndex
+from workers.fanout.interfaces import AnalyticsStore, GraphStore, RelationalStore, SearchIndex, ValidatedEntity
 from workers.fanout.worker import FanoutWorker
 
 
@@ -42,26 +41,24 @@ class IngestDependencies:
     analytics_store: AnalyticsStore
 
 
-def _build_catalog_entity(item: EntityItem, auth: AuthContext) -> CatalogEntity:
+def _build_validated_entity(item: EntityItem, auth: AuthContext) -> ValidatedEntity:
     """Merge a validated push-payload entity with server-resolved common
-    fields into the fully-resolved CatalogEntity the fan-out worker
-    expects. See shared/schema/README.md and
-    workers/fanout/interfaces.py's CatalogEntity docstring for exactly
-    which fields are server-assigned vs. connector-supplied."""
+    fields (tenant_id, data_plane_id - never trusted from the push payload,
+    see shared/schema/README.md) into the ValidatedEntity the fan-out
+    worker expects. Identity/first-seen tracking (id, first_seen_at) is
+    NOT resolved here - FE2's RelationalStore (the system of record) owns
+    that internally; see workers/fanout/interfaces.py's ValidatedEntity
+    docstring for why this doesn't carry those fields."""
     source_connection_id = item.payload.get("source_connection_id")
-    return CatalogEntity(
-        id=str(uuid.uuid4()),  # candidate id - RelationalStore keeps the existing one if urn already exists
+    return ValidatedEntity(
         urn=item.urn,
         entity_type=item.entity_type,
         tenant_id=auth.tenant_id,
         data_plane_id=auth.data_plane_id,
         source_connection_id=source_connection_id,
         operation=item.operation,
-        is_deleted=(item.operation == "delete"),
         content_hash=item.content_hash,
         extracted_at=item.extracted_at,
-        first_seen_at=item.extracted_at,  # candidate - preserved by RelationalStore if urn already exists
-        last_scraped_at=item.extracted_at,
         payload={k: v for k, v in item.payload.items()},
     )
 
@@ -117,7 +114,7 @@ def process_batch(
         return IngestBatchResponse.model_validate({**cached.response_body, "replayed": True})
 
     # 4. Per-entity validation -> accept/reject split.
-    accepted_entities: List[CatalogEntity] = []
+    accepted_entities: List[ValidatedEntity] = []
     accepted_urns: List[str] = []
     rejected: List[RejectedEntity] = []
     for item in envelope.entities:
@@ -125,7 +122,7 @@ def process_batch(
         if rejection is not None:
             rejected.append(RejectedEntity(urn=rejection.urn, error=rejection.error, detail=rejection.detail))
             continue
-        accepted_entities.append(_build_catalog_entity(item, auth))
+        accepted_entities.append(_build_validated_entity(item, auth))
         accepted_urns.append(item.urn)
 
     # 5. Enqueue accepted entities to the fan-out worker. (Synchronous for

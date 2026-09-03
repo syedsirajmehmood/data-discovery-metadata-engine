@@ -5,54 +5,41 @@ ClickHouse running. These are NOT the production storage clients - FE2
 owns those under `control-plane/storage/`. Keep these deliberately simple;
 they exist to satisfy the Protocols in interfaces.py structurally so
 worker.py's tests are self-contained.
+
+Reconciliation note (2026-09-03, orchestrator): rewritten to match FE2's
+actual `storage.types.EntityRecord`/`UpsertResult` shape - see
+interfaces.py's module docstring.
 """
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import Dict, List
+from typing import Dict, List, Union
 
-from workers.fanout.interfaces import (
-    AnalyticsEvent,
-    CatalogEntity,
-    UpsertResult,
-)
+from storage.types import EntityRecord, ScrapeEvent, UpsertResult, UsageEvent
 
 
 class InMemoryRelationalStore:
     """Fake for RelationalStore. Tracks entities by urn, and is the one
     fake that actually implements the content_hash no-op check, mirroring
-    the real Postgres store's role as system of record (see interfaces.py's
-    UpsertResult docstring)."""
+    the real Postgres store's role as system of record."""
 
     def __init__(self) -> None:
-        self.entities_by_urn: Dict[str, CatalogEntity] = {}
-        self.upsert_calls: List[CatalogEntity] = []
+        self.records_by_urn: Dict[str, EntityRecord] = {}
+        self.upsert_calls: List[EntityRecord] = []
 
-    def upsert_entity(self, entity: CatalogEntity) -> UpsertResult:
-        self.upsert_calls.append(entity)
-        previous = self.entities_by_urn.get(entity.urn)
-        changed = (
-            previous is None
-            or previous.content_hash != entity.content_hash
-            or previous.is_deleted != entity.is_deleted
+    def upsert_entity(self, record: EntityRecord) -> UpsertResult:
+        self.upsert_calls.append(record)
+        previous = self.records_by_urn.get(record.urn)
+        created = previous is None
+        skipped = (
+            previous is not None
+            and not record.is_delete
+            and previous.content_hash == record.content_hash
         )
-        stored = entity
-        if previous is not None:
-            # `id` and `first_seen_at` are catalog-side/immutable once
-            # assigned (spec.md: "first_seen_at (catalog-side, immutable
-            # once set)"; "id (UUID, globally unique)"). The ingest layer
-            # only ever sends a *candidate* id/first_seen_at for a urn it
-            # hasn't necessarily seen before (see
-            # control-plane/api/ingest/service.py) - the relational store
-            # (system of record) is the authority on whether this urn
-            # already exists, and if so keeps the original id/first_seen_at
-            # rather than the incoming candidate values.
-            stored = replace(entity, id=previous.id, first_seen_at=previous.first_seen_at)
-        self.entities_by_urn[entity.urn] = stored
-        return UpsertResult(changed=changed, stored_id=stored.id)
+        self.records_by_urn[record.urn] = record
+        return UpsertResult(urn=record.urn, created=created, skipped=skipped, tombstoned=record.is_delete)
 
-    def get(self, urn: str) -> CatalogEntity:
-        return self.entities_by_urn[urn]
+    def get(self, urn: str) -> EntityRecord:
+        return self.records_by_urn[urn]
 
 
 class InMemoryGraphStore:
@@ -60,25 +47,27 @@ class InMemoryGraphStore:
     real node/edge modeling is FE2's job."""
 
     def __init__(self) -> None:
-        self.upserted: List[CatalogEntity] = []
+        self.upserted: List[EntityRecord] = []
 
-    def upsert_entity(self, entity: CatalogEntity) -> None:
-        self.upserted.append(entity)
+    def upsert_entity(self, record: EntityRecord) -> UpsertResult:
+        self.upserted.append(record)
+        return UpsertResult(urn=record.urn, created=True)
 
     def urns(self) -> List[str]:
-        return [e.urn for e in self.upserted]
+        return [r.urn for r in self.upserted]
 
 
 class InMemorySearchIndex:
     """Fake for SearchIndex. Keeps the latest indexed document per urn."""
 
     def __init__(self) -> None:
-        self.documents_by_urn: Dict[str, CatalogEntity] = {}
-        self.index_calls: List[CatalogEntity] = []
+        self.documents_by_urn: Dict[str, EntityRecord] = {}
+        self.index_calls: List[EntityRecord] = []
 
-    def index_entity(self, entity: CatalogEntity) -> None:
-        self.index_calls.append(entity)
-        self.documents_by_urn[entity.urn] = entity
+    def index_entity(self, record: EntityRecord) -> UpsertResult:
+        self.index_calls.append(record)
+        self.documents_by_urn[record.urn] = record
+        return UpsertResult(urn=record.urn, created=True)
 
 
 class InMemoryAnalyticsStore:
@@ -86,7 +75,7 @@ class InMemoryAnalyticsStore:
     table it stands in for."""
 
     def __init__(self) -> None:
-        self.events: List[AnalyticsEvent] = []
+        self.events: List[Union[ScrapeEvent, UsageEvent]] = []
 
-    def record_event(self, event: AnalyticsEvent) -> None:
+    def record_event(self, event: Union[ScrapeEvent, UsageEvent]) -> None:
         self.events.append(event)

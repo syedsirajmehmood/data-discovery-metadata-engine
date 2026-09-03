@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-discovery.internal/1.0/common.schema.json",
+  "title": "CommonEntityFields",
+  "description": "Fields carried by every catalog entity (Table, Column, Dataset, Job, Lineage Edge), per spec.md's metadata schema section. NOTE ON INGEST vs STORED SHAPE: this schema describes the canonical STORED record. Of these fields, `id`, `tenant_id`, `first_seen_at`, `last_scraped_at`, and `is_deleted` are catalog-side / server-assigned (see architecture.md §2: 'tenant_id is never accepted from the request body') and must never be supplied by a data-plane push; the ingest API rejects any entity payload that includes them. `data_plane_id` is supplied once at the envelope level (architecture.md §2) and is cross-checked against the authenticated API key's registration, not repeated per-entity. `source_connection_id` IS supplied per-entity in the push payload (architecture.md's envelope does not carry it at the top level, and the connector is the only party that knows which named source connection produced a given record). None of these fields are required at the JSON Schema level here so this one file can validate both the stored shape (all fields present) and, combined with control-plane/api/ingest's server-assigned-field rejection check, the inbound payload shape (server-assigned fields absent). See shared/schema/README.md.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique. Server-assigned; never accepted from a push payload."
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Server-resolved from the API key. Never accepted from a push payload."
+    },
+    "data_plane_id": {
+      "type": "string",
+      "description": "Which customer environment/connector instance produced this record. Supplied once per batch at the envelope level, not per-entity."
+    },
+    "source_connection_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Which configured source (e.g. 'prod-postgres-1') within that data plane. Supplied per-entity in the push payload."
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Catalog-side, immutable once set. Server-assigned; never accepted from a push payload."
+    },
+    "last_scraped_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Catalog-side, updated on every successful scrape that observes this entity. Server-assigned; never accepted from a push payload."
+    },
+    "is_deleted": {
+      "type": "boolean",
+      "default": false,
+      "description": "Tombstoned, not hard-deleted. Server-derived from the envelope entity item's `operation` (upsert -> false, delete -> true); never accepted from a push payload."
+    }
+  }
+}

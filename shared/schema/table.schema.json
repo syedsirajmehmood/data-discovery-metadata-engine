@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-discovery.internal/1.0/table.schema.json",
+  "title": "Table",
+  "description": "Covers a Postgres table/view. Field list per spec.md metadata schema section, 'Table'. See Dataset for S3.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "common.schema.json" },
+    { "$ref": "#/$defs/table_specific_fields" }
+  ],
+  "required": [
+    "source_connection_id",
+    "source_type",
+    "database_name",
+    "schema_name",
+    "table_name",
+    "fully_qualified_name",
+    "object_type"
+  ],
+  "$defs": {
+    "table_specific_fields": {
+      "type": "object",
+      "properties": {
+        "source_type": { "type": "string", "const": "postgres" },
+        "database_name": { "type": "string", "minLength": 1 },
+        "schema_name": { "type": "string", "minLength": 1 },
+        "table_name": { "type": "string", "minLength": 1 },
+        "fully_qualified_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "e.g. postgres://<host>/<db>.<schema>.<table>"
+        },
+        "object_type": {
+          "type": "string",
+          "enum": ["table", "view", "materialized_view"]
+        },
+        "description": { "type": ["string", "null"] },
+        "description_source": {
+          "type": ["string", "null"],
+          "enum": ["source_comment", "manual", null]
+        },
+        "owner": { "type": ["string", "null"] },
+        "owner_source": {
+          "type": ["string", "null"],
+          "enum": ["source", "manual", null]
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "row_count_estimate": { "type": ["integer", "null"], "minimum": 0 },
+        "size_bytes_estimate": { "type": ["integer", "null"], "minimum": 0 },
+        "source_created_at": { "type": ["string", "null"], "format": "date-time" },
+        "source_last_modified_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

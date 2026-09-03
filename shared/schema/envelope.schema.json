@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-discovery.internal/1.0/envelope.schema.json",
+  "title": "IngestBatchEnvelope",
+  "description": "The push-contract request envelope, per architecture.md §2. POST /v1/ingest/batches. schema_version '1.0'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["batch_id", "data_plane_id", "connector_type", "schema_version", "sent_at", "entities"],
+  "properties": {
+    "batch_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Client-generated, unique per attempt-set. A retry of the same batch reuses the same batch_id (idempotency key)."
+    },
+    "data_plane_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Must match the data_plane_id the presented API key is registered to; the ingest API rejects a mismatch rather than trusting this value blindly."
+    },
+    "connector_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "e.g. 'postgres', 's3'. Extensible - new connector types require no envelope change."
+    },
+    "schema_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Currently '1.0' (shared.schema.CURRENT_SCHEMA_VERSION). Deliberately not a JSON Schema const here - the ingest API checks the exact supported version in code (control-plane/api/ingest/service.py) and returns a dedicated 'unsupported_schema_version' error, rather than a generic schema-validation failure, so a future minor-version bump is a one-constant change, not a shared/schema edit."
+    },
+    "sent_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/entity_item" }
+    }
+  },
+  "$defs": {
+    "entity_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["urn", "entity_type", "operation", "extracted_at", "payload"],
+      "properties": {
+        "urn": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable identity of the entity across pushes, e.g. urn:postgres:{host}:{database}:{schema}.{table}."
+        },
+        "entity_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Selects which shared/schema/<entity_type>.schema.json validates `payload`. Deliberately NOT an enum here - architecture.md §2: 'new types don't require an envelope change, only a new schema file'. The MVP set this ingest API can currently dispatch to is shared.schema.ENTITY_SCHEMA_FILES ({table, column, dataset, job, lineage_edge, scrape_run}); an unrecognized value is rejected per-entity as 'unsupported_entity_type' rather than failing the whole envelope, so an old ingest API and a data plane that's started emitting a newer entity_type degrade gracefully (that one entity is rejected, the rest of the batch still processes)."
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["upsert", "delete"]
+        },
+        "content_hash": {
+          "type": "string",
+          "description": "e.g. 'sha256:...'. Optional - lets the fan-out worker skip re-writing when a re-scrape found no change. Not required for delete operations."
+        },
+        "extracted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object",
+          "description": "Entity-type-specific fields, validated against shared/schema/<entity_type>.schema.json. For operation=delete this may be an empty object - only urn/entity_type are needed to tombstone."
+        }
+      }
+    }
+  }
+}

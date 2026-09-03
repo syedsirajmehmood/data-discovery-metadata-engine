@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-discovery.internal/1.0/dataset.schema.json",
+  "title": "Dataset",
+  "description": "Covers an S3-sourced object (a bucket+prefix grouped as one logical unit). Field list per spec.md metadata schema section, 'Dataset'. Distinct from Table because S3 has no guaranteed schema.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "common.schema.json" },
+    { "$ref": "#/$defs/dataset_specific_fields" }
+  ],
+  "required": [
+    "source_connection_id",
+    "source_type",
+    "bucket",
+    "prefix",
+    "fully_qualified_name",
+    "schema_inferred"
+  ],
+  "$defs": {
+    "dataset_specific_fields": {
+      "type": "object",
+      "properties": {
+        "source_type": { "type": "string", "const": "s3" },
+        "bucket": { "type": "string", "minLength": 1 },
+        "prefix": { "type": "string" },
+        "fully_qualified_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "e.g. s3://<bucket>/<prefix>"
+        },
+        "file_format": {
+          "type": ["string", "null"],
+          "enum": ["parquet", "csv", "json", "mixed", "unknown", null]
+        },
+        "schema_inferred": {
+          "type": "boolean",
+          "description": "Drives AC-2a's 'no schema inferred' state in the UI."
+        },
+        "object_count_estimate": { "type": ["integer", "null"], "minimum": 0 },
+        "total_size_bytes_estimate": { "type": ["integer", "null"], "minimum": 0 },
+        "description": { "type": ["string", "null"] },
+        "description_source": {
+          "type": ["string", "null"],
+          "enum": ["source_comment", "manual", null]
+        },
+        "owner": { "type": ["string", "null"] },
+        "owner_source": {
+          "type": ["string", "null"],
+          "enum": ["source", "manual", null]
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "fields": {
+          "type": "array",
+          "description": "Present only when schema_inferred=true (e.g. Parquet schema or Glue-catalog-style inference); absent/omitted when schema_inferred=false. Reuses the Column shape's entity-specific fields (not Column's common/id fields - these are inferred field descriptors, not standalone Column entities).",
+          "items": { "$ref": "column.schema.json#/$defs/column_specific_fields" }
+        }
+      }
+    }
+  }
+}

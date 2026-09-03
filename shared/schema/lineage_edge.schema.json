@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-discovery.internal/1.0/lineage_edge.schema.json",
+  "title": "LineageEdge",
+  "description": "Field list per spec.md metadata schema section, 'Lineage Edge'. MVP minimum viable granularity is table-level; column-level is schema-supported but not required for MVP demo.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "common.schema.json" },
+    { "$ref": "#/$defs/lineage_edge_specific_fields" }
+  ],
+  "required": [
+    "source_connection_id",
+    "upstream_entity_id",
+    "upstream_entity_type",
+    "downstream_entity_id",
+    "downstream_entity_type",
+    "edge_granularity",
+    "confidence",
+    "discovered_at"
+  ],
+  "$defs": {
+    "lineage_edge_specific_fields": {
+      "type": "object",
+      "properties": {
+        "upstream_entity_id": { "type": "string", "minLength": 1 },
+        "upstream_entity_type": {
+          "type": "string",
+          "enum": ["table", "column", "dataset", "job"]
+        },
+        "downstream_entity_id": { "type": "string", "minLength": 1 },
+        "downstream_entity_type": {
+          "type": "string",
+          "enum": ["table", "column", "dataset", "job"]
+        },
+        "edge_granularity": {
+          "type": "string",
+          "enum": ["table_level", "column_level"]
+        },
+        "producer_job_id": {
+          "type": ["string", "null"],
+          "description": "Null when lineage is inferred or manually asserted rather than job-derived."
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["inferred", "manually_asserted", "job_declared"]
+        },
+        "discovered_at": { "type": "string", "format": "date-time" },
+        "last_confirmed_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-discovery.internal/1.0/ingest_response.schema.json",
+  "title": "IngestBatchResponse",
+  "description": "Response body for POST /v1/ingest/batches, per architecture.md §2. Per-entity accept/reject, not just a batch-level status code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["batch_id", "accepted", "rejected"],
+  "properties": {
+    "batch_id": { "type": "string", "format": "uuid" },
+    "replayed": {
+      "type": "boolean",
+      "description": "True when this batch_id was already processed and the cached response is being returned (idempotent replay, no re-processing)."
+    },
+    "accepted": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "URNs of entities that passed validation and were enqueued to the fan-out worker."
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["urn", "error", "detail"],
+        "properties": {
+          "urn": { "type": "string" },
+          "error": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}

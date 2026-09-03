@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-discovery.internal/1.0/job.schema.json",
+  "title": "Job",
+  "description": "Job / DAG. Field list per spec.md metadata schema section, 'Job / DAG'. Schema defined for extensibility; no MVP connector populates this (dbt/Airflow connectors are post-MVP).",
+  "type": "object",
+  "allOf": [
+    { "$ref": "common.schema.json" },
+    { "$ref": "#/$defs/job_specific_fields" }
+  ],
+  "required": [
+    "source_connection_id",
+    "job_type",
+    "name",
+    "source_system"
+  ],
+  "$defs": {
+    "job_specific_fields": {
+      "type": "object",
+      "properties": {
+        "job_type": {
+          "type": "string",
+          "enum": ["dbt_model", "airflow_dag", "airflow_task", "manual", "unknown"]
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "source_system": { "type": "string", "minLength": 1 },
+        "owner": { "type": ["string", "null"] },
+        "schedule": {
+          "type": ["string", "null"],
+          "description": "Cron-like string, nullable."
+        },
+        "description": { "type": ["string", "null"] },
+        "last_run_at": { "type": ["string", "null"], "format": "date-time" },
+        "last_run_status": {
+          "type": ["string", "null"],
+          "enum": ["success", "failed", "running", "unknown", null]
+        }
+      }
+    }
+  }
+}

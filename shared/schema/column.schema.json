@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-discovery.internal/1.0/column.schema.json",
+  "title": "Column",
+  "description": "Belongs to a Table. Field list per spec.md metadata schema section, 'Column'. Common fields (id, tenant_id, data_plane_id, source_connection_id, first_seen_at, last_scraped_at, is_deleted) come from common.schema.json - see that file's description for which are server-assigned vs. connector-supplied.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "common.schema.json" },
+    { "$ref": "#/$defs/column_specific_fields" }
+  ],
+  "required": [
+    "source_connection_id",
+    "table_id",
+    "name",
+    "ordinal_position",
+    "native_data_type",
+    "normalized_data_type",
+    "is_nullable",
+    "is_primary_key",
+    "is_foreign_key"
+  ],
+  "$defs": {
+    "column_specific_fields": {
+      "type": "object",
+      "properties": {
+        "table_id": {
+          "type": "string",
+          "description": "FK to the owning Table's id or urn."
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "ordinal_position": { "type": "integer", "minimum": 0 },
+        "native_data_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact string as reported by source, e.g. 'character varying(255)'."
+        },
+        "normalized_data_type": {
+          "type": "string",
+          "enum": [
+            "string", "integer", "float", "boolean", "timestamp",
+            "date", "binary", "json", "array", "struct", "unknown"
+          ],
+          "description": "Catalog's canonical type bucket so search/UI can group/filter across sources consistently."
+        },
+        "is_nullable": { "type": "boolean" },
+        "is_primary_key": { "type": "boolean" },
+        "is_foreign_key": { "type": "boolean" },
+        "foreign_key_ref": {
+          "type": ["object", "null"],
+          "description": "Pointer to the referenced table/column when is_foreign_key is true.",
+          "properties": {
+            "table_urn": { "type": "string" },
+            "column_name": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "description": { "type": ["string", "null"] },
+        "description_source": {
+          "type": ["string", "null"],
+          "enum": ["source_comment", "manual", null]
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    }
+  }
+}

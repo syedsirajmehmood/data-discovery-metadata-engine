@@ -1,0 +1,20 @@
+# Dependencies for FE1's scope: control-plane/api/ingest/,
+# control-plane/workers/fanout/, shared/schema/. FE2's storage/ and FE3's
+# web/ have their own dependency lists once those exist - this file only
+# covers what this task built.
+#
+# Pinned as lower bounds (>=) with the versions this was actually built
+# and tested against noted in control-plane/README.md, per usual FastAPI
+# ecosystem practice at this project stage (no lockfile yet - MVP/early
+# development, per decisions.md).
+
+fastapi>=0.110
+uvicorn[standard]>=0.30
+pydantic>=2.6
+jsonschema>=4.20
+referencing>=0.30
+
+# test-only, but kept in one file for this MVP stage rather than
+# splitting requirements/requirements-dev.txt
+pytest>=7.4
+httpx>=0.27

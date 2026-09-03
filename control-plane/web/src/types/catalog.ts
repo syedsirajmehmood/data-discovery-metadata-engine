@@ -238,6 +238,41 @@ export interface SourcesStatusResponse {
 }
 
 /**
+ * Wire shape of GET /v1/catalog/sources/status, as FE2 actually built it
+ * (control-plane/api/catalog/schemas.py: SourcesStatusResponse/SourceStatus/
+ * SourceConnectionStatus) — reconciled 2026-09-03 after the shapes above
+ * (`data_planes` / `SourceConnectionSummary`, what this page was originally
+ * built against) turned out not to match what the backend returns
+ * (`sources`, much lower-level per-connection fields, no per-connection
+ * `type`, no configured `scrape_interval_seconds`, no consecutive-failure
+ * history, no scrape-run history, no tombstoned-entity list). See
+ * src/api/catalog.ts's `mapSourcesStatusResponse` for the adapter that
+ * turns this into the shape above, and its inline comments for exactly
+ * which fields are real vs. a documented best-effort approximation.
+ */
+export interface RawSourceConnectionStatus {
+  source_connection_id: string
+  last_run_status: ScrapeRunStatus | null
+  last_run_started_at: string | null
+  last_run_completed_at: string | null
+  entities_seen_count: number
+  entities_created_count: number
+  entities_tombstoned_count: number
+  error_summary: string | null
+}
+
+export interface RawSourceStatus {
+  data_plane_id: string
+  data_plane_name: string | null
+  last_seen_at: string | null
+  source_connections: RawSourceConnectionStatus[]
+}
+
+export interface RawSourcesStatusResponse {
+  sources: RawSourceStatus[]
+}
+
+/**
  * POST /v1/catalog/sources/{source_connection_id}/scrape
  *
  * NOT part of architecture.md's documented catalog read API — this

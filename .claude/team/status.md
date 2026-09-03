@@ -324,3 +324,49 @@ sources/status endpoint reads scrape history from ClickHouse instead of
 Postgres — a real design choice, not a one-line fix, so left for a
 follow-up rather than guessed at here. Search and asset-detail views are
 unaffected and fully working.
+
+## 2026-09-03 — Third integration bug: FE3 vs. FE2 on /sources/status shape (orchestrator)
+Confirmed the exact risk flagged in the "still not done" list above (item
+4/point 3): FE3's `/sources` page called `data.data_planes` on the response
+from `GET /v1/catalog/sources/status`, but FE2's real implementation
+returns `{ sources: [...] }` with much lower-level per-connection fields
+(no `type`, no configured `scrape_interval_seconds`, no consecutive-failure
+history, no scrape-run history beyond the latest run, no tombstoned-entity
+list, and the endpoint ignores the `source_connection_id` query param FE3
+assumed it would honor). The shape mismatch threw an uncaught TypeError in
+render (`data.data_planes.reduce` on undefined), which React surfaced as a
+blank page with no error boundary.
+
+Fixed with a client-side adapter (`control-plane/web/src/api/catalog.ts`,
+`mapSourcesStatusResponse` + `mapSourceConnection` + `deriveStatus` +
+`inferSourceType`) rather than changing FE2's already-tested API contract
+or FE3's page components. The adapter is shape-detecting: FE2's real
+`{sources: [...]}` gets transformed; the mock-fetch dev layer's existing
+`{data_planes: [...]}` fixtures (and the 45 tests built against them) pass
+through unchanged, so nothing about the mocked dev experience regressed.
+
+**Approximations the adapter makes, documented inline in catalog.ts and
+worth someone's attention later, not silent:**
+- `type` (postgres/s3) is guessed from the connection id string, since the
+  backend doesn't return connector_type on this endpoint.
+- `scrape_interval_seconds` is hardcoded to the spec.md NFR-1 default (6h)
+  for every connection, since the backend doesn't return a per-connection
+  configured interval.
+- `consecutive_failure_count` is approximated as 0 or 1 (whether the
+  latest run failed), since the backend returns one snapshot, not history.
+- `scrape_runs` shows only the single latest run (real data, not
+  fabricated) rather than actual history, and `tombstoned_entities` is
+  always empty — neither is available from this endpoint at all.
+
+A more complete fix would add `connector_type`, a configured interval, and
+run-history/tombstoned-entity endpoints to the backend rather than
+approximating them client-side — noted here for whoever picks this up
+next, alongside the still-open `sources/status`-always-empty gap above
+(which is why this bug wasn't caught by a normal manual click-through
+before now: the page never had real data to render against until this
+session's local-stack run).
+
+Verified: `tsc -b` clean, all 45 frontend tests still pass, and
+`GET /sources` now renders the correct "No sources connected yet" empty
+state against the live backend instead of crashing (still empty because of
+the separate bookkeeping gap noted above — not this bug).

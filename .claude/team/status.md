@@ -370,3 +370,57 @@ Verified: `tsc -b` clean, all 45 frontend tests still pass, and
 `GET /sources` now renders the correct "No sources connected yet" empty
 state against the live backend instead of crashing (still empty because of
 the separate bookkeeping gap noted above — not this bug).
+
+## 2026-09-03 — Same FE3/FE2 shape-mismatch bug, two more places (orchestrator)
+Following the /sources fix, the user hit blank screens on `/search` (typed
+a query, got nothing) and would have hit the same on the asset detail page
+next. Same root cause as the /sources bug, same fix pattern, applied to the
+other two FE2 endpoints FE3 consumes:
+
+- **`GET /v1/catalog/search`**: real response is `{total, results}` only.
+  Every `FreshnessBadge` unconditionally reads `result.freshness.
+  stale_threshold_seconds` — with `freshness` undefined, this threw on the
+  very first result, and `FacetFilters` did the same with `facets.
+  entity_type.map(...)`. No error boundary anywhere in the app, so React
+  unmounted to blank. Fixed via `mapSearchResponse` in api/catalog.ts:
+  synthesizes `facets: {entity_type:[],source_connection:[],tags:[]}` and
+  `degraded_source_connections: []` (backend doesn't compute either), and
+  per-result `freshness` from the one real field available
+  (`last_scraped_at`) plus the same assumed-6h-interval approximation as
+  the /sources fix. `source_connection_id`/`source_connection_name` on
+  results are left as empty strings — genuinely not returned by this
+  endpoint, not guessable.
+- **`GET /v1/catalog/tables/{urn}`**: real `TableDetail` is missing `id`
+  (only `urn`), `data_plane_name`/`source_connection_name` (only the ids),
+  `source_created_at`/`source_last_modified_at`, and `freshness`; its
+  `foreign_key_ref` is a raw `{table_urn, column}` object where FE3's
+  `Column.foreign_key_ref` type is `string | null`. Fixed via
+  `mapAssetResponse`/`mapColumn` in api/catalog.ts — verified the adapter's
+  assumed shape against a live curl of the real endpoint, byte-for-byte
+  match, before shipping it.
+
+**A fourth, bigger gap found in the process, deliberately NOT fixed here**:
+`GET /v1/catalog/tables/{urn}` only ever queries Postgres's `TableEntity`
+table (`RelationalStore.get_table_with_columns`) — there is no code path
+for Dataset entities at all. Clicking an S3-sourced search result will
+404, even though FE3's own doc comment (and design.md) assumed this
+endpoint serves both Table and Dataset detail. Fixing this needs a new
+`RelationalStore` query method plus entity-type branching in
+`api/catalog/router.py` — a backend change, not something to paper over
+client-side like the shape mismatches above. Table urns (Postgres sources)
+work correctly end-to-end; Dataset urns (S3 sources) don't yet.
+
+All three fixes follow the same shape-detecting adapter pattern as
+`mapSourcesStatusResponse` — real backend shapes get transformed, the
+mock-fetch layer's richer fixtures pass through unchanged. `tsc -b` clean,
+all 45 tests still pass after each change.
+
+**Pattern worth naming for whoever picks up the Dataset-detail gap or any
+future endpoint work**: every reconciliation bug found in this session (
+FE1↔FE2 types, the column schema field names, and now three FE3↔FE2 shape
+mismatches) was invisible to each side's own test suite, because each
+suite tested against its own fakes/mocks/fixtures, which were internally
+consistent but never cross-checked against the other side's actual
+implementation. Unit tests here proved each piece was self-consistent, not
+that the pieces agreed with each other — only running the full stack
+together surfaced these, and did so quickly once tried.

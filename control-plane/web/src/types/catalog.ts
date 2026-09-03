@@ -273,6 +273,95 @@ export interface RawSourcesStatusResponse {
 }
 
 /**
+ * Wire shape of GET /v1/catalog/search, as FE2 actually built it
+ * (control-plane/api/catalog/schemas.py: SearchResponse/SearchResultItem)
+ * — reconciled 2026-09-03, same category of gap as the sources/status
+ * shapes above: no `facets`, no `degraded_source_connections`, and each
+ * result is missing `source_connection_id`/`source_connection_name`/
+ * `owner_source`/`freshness` (a computed object every result needs —
+ * FreshnessBadge/computeFreshness read it unconditionally, so its absence
+ * was an uncaught crash on the search page, not just a missing display
+ * field). See src/api/catalog.ts's `mapSearchResponse` for the adapter.
+ */
+export interface RawSearchResultItem {
+  urn: string
+  entity_type: string
+  source_type: string | null
+  name: string | null
+  description: string | null
+  tags: string[]
+  owner: string | null
+  fully_qualified_name: string | null
+  last_scraped_at: string | null
+  score: number | null
+}
+
+export interface RawSearchResponse {
+  total: number
+  results: RawSearchResultItem[]
+}
+
+/**
+ * Wire shape of GET /v1/catalog/tables/{urn}, as FE2 actually built it
+ * (control-plane/api/catalog/schemas.py: TableDetailResponse/TableDetail/
+ * ColumnDetail) — reconciled 2026-09-03, same category of gap again: no
+ * `id` (only `urn`), no `data_plane_name`/`source_connection_name` (only
+ * the ids), no `source_created_at`/`source_last_modified_at`, no
+ * `freshness`, and `foreign_key_ref` is a raw object, not the `string |
+ * null` this UI's `Column` type expects. See `mapAssetResponse`.
+ *
+ * Bigger, NOT-fixed-here gap: this endpoint only ever queries Postgres's
+ * `TableEntity` table (`RelationalStore.get_table_with_columns`) — an S3
+ * Dataset urn 404s here even though FE3's `getAsset` doc comment (and
+ * design.md) assume this is "the single asset-detail endpoint for both
+ * Table and Dataset entities." Clicking a Dataset search result will 404
+ * until the backend adds Dataset lookup to this endpoint. Table urns
+ * (Postgres sources) work correctly.
+ */
+export interface RawColumnDetail {
+  urn: string
+  table_urn: string
+  name: string
+  ordinal_position: number
+  native_data_type: string
+  normalized_data_type: string
+  is_nullable: boolean
+  is_primary_key: boolean
+  is_foreign_key: boolean
+  foreign_key_ref: { table_urn?: string; column?: string } | null
+  description: string | null
+  description_source: string | null
+  tags: string[]
+}
+
+export interface RawTableDetail {
+  urn: string
+  fully_qualified_name: string
+  source_type: string
+  database_name: string
+  schema_name: string
+  table_name: string
+  object_type: string
+  description: string | null
+  description_source: string | null
+  owner: string | null
+  owner_source: string | null
+  tags: string[]
+  row_count_estimate: number | null
+  size_bytes_estimate: number | null
+  source_connection_id: string
+  data_plane_id: string
+  first_seen_at: string | null
+  last_scraped_at: string | null
+  is_deleted: boolean
+}
+
+export interface RawTableDetailResponse {
+  table: RawTableDetail
+  columns: RawColumnDetail[]
+}
+
+/**
  * POST /v1/catalog/sources/{source_connection_id}/scrape
  *
  * NOT part of architecture.md's documented catalog read API — this

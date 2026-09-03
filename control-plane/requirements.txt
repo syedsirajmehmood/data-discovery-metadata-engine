@@ -1,20 +1,19 @@
-# Dependencies for FE1's scope: control-plane/api/ingest/,
-# control-plane/workers/fanout/, shared/schema/. FE2's storage/ and FE3's
-# web/ have their own dependency lists once those exist - this file only
-# covers what this task built.
-#
-# Pinned as lower bounds (>=) with the versions this was actually built
-# and tested against noted in control-plane/README.md, per usual FastAPI
-# ecosystem practice at this project stage (no lockfile yet - MVP/early
-# development, per decisions.md).
+# Combined dependencies for control-plane/: api/ingest + workers/fanout
+# (FE1), storage/ + api/catalog (FE2). No lockfile yet - MVP/early
+# development stage, per decisions.md.
 
-fastapi>=0.110
-uvicorn[standard]>=0.30
-pydantic>=2.6
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.6,<3.0
 jsonschema>=4.20
 referencing>=0.30
+sqlalchemy>=2.0,<3.0
+psycopg[binary]>=3.1,<4.0
+neo4j>=5.14,<6.0
+opensearch-py>=2.4,<3.0
+clickhouse-connect>=0.7,<1.0
 
-# test-only, but kept in one file for this MVP stage rather than
-# splitting requirements/requirements-dev.txt
+# test-only, kept in one file for this MVP stage rather than splitting
+# requirements/requirements-dev.txt
 pytest>=7.4
 httpx>=0.27

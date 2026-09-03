@@ -1,0 +1,74 @@
+# Local dev / integration-test stack for the control plane's four storage
+# engines (architecture.md §4). Not used in production — production points
+# at managed or self-hosted equivalents via the same env vars these
+# containers happen to match the defaults of (see each storage/*/client.py
+# or db.py for the exact env var names).
+#
+# Usage:
+#   docker compose -f infra/docker-compose.yml up -d
+#   docker compose -f infra/docker-compose.yml down -v   # tear down + wipe data
+#
+# FE2's storage clients (control-plane/storage/*) are the only things in
+# this repo that currently need these services; FE1's ingest API / fan-out
+# worker and FE3's UI will point at the same containers once they land.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: catalog
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+    ports:
+      # Host port 5433, not 5432: avoids clashing with any other Postgres
+      # already running on the dev machine. Set POSTGRES_PORT=5433 when
+      # running tests/app locally against this compose file (see README).
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog -d catalog"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    image: neo4j:5.19-community
+    environment:
+      NEO4J_AUTH: neo4j/neo4jpassword
+      NEO4J_PLUGINS: '[]'
+    ports:
+      - "7474:7474" # browser UI
+      - "7687:7687" # bolt
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.3
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    environment:
+      CLICKHOUSE_DB: catalog
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123" # HTTP interface (clickhouse-connect uses this)
+      - "9000:9000" # native TCP
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
